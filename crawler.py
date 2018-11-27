@@ -1,4 +1,6 @@
 from abc import abstractmethod, ABC
+from contextlib import suppress
+
 from bs4 import BeautifulSoup
 from collections import namedtuple
 import aiohttp
@@ -58,7 +60,6 @@ class TntCrawler:
             if self._stop_event.is_set():
                 break
             self._workers.append(asyncio.ensure_future(self.work(page), loop=self._loop))
-
         await asyncio.gather(*self._workers, loop=self._loop)
 
     async def work(self, page):
@@ -71,7 +72,8 @@ class TntCrawler:
 
     def stop(self):
         self._stop_event.set()
-        [task.cancel() for task in self._workers]
+        for task in self._workers:
+            task.cancel()
 
     def shutdown(self):
         self._loop.run_until_complete(self._session.close())
@@ -119,12 +121,12 @@ if __name__ == '__main__':
         def add(self, tnt_entry: TntEntry):
             print(tnt_entry.magnet)
 
-    loop = asyncio.get_event_loop()
-    crawler = TntCrawler(loop, TntStdoutWriter())
+    event_loop = asyncio.get_event_loop()
+    crawler = TntCrawler(event_loop, TntStdoutWriter())
     crawler.setup('ciao', 0)
     try:
-        loop.run_until_complete(crawler.crawl())
+        event_loop.run_until_complete(crawler.crawl())
     finally:
         crawler.stop()
         crawler.shutdown()
-    loop.close()
+    event_loop.close()
