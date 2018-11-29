@@ -1,6 +1,4 @@
 from abc import abstractmethod, ABC
-from contextlib import suppress
-
 from bs4 import BeautifulSoup
 from collections import namedtuple
 import aiohttp
@@ -20,18 +18,37 @@ class TntCrawlerError(Exception):
     pass
 
 
+class CancelOnEvent:
+    def __init__(self, event, future, loop):
+        self._future = future
+        self._event = event
+        self._loop = loop
+
+    async def __aenter__(self):
+        self._cancel_task = asyncio.ensure_future(self._cancellation_task(), loop=self._loop)
+
+    async def __aexit__(self, *exc):
+        try:
+            self._cancel_task.cancel()
+            await self._cancel_task
+        except asyncio.CancelledError:
+            pass
+
+    async def _cancellation_task(self):
+        await self._event.wait()
+        self._future.cancel()
+
+
 class TntCrawler:
     release_list = 'http://www.tntvillage.scambioetico.org/src/releaselist.php'
 
     def __init__(self, loop: asyncio.AbstractEventLoop, writer, max_workers=10):
         self._loop = loop
-        self._session = aiohttp.ClientSession(loop=loop)
         self._semaphore = asyncio.BoundedSemaphore(max_workers, loop=loop)
         self._stop_event = asyncio.Event(loop=loop)
         self._writer = writer
         self._keyword = ''
         self._category = 0
-        self._workers = []
 
     def setup(self, keyword, category):
         if keyword is None:
@@ -42,46 +59,66 @@ class TntCrawler:
         self._category = category
 
     async def crawl(self):
+        session = aiohttp.ClientSession(loop=self._loop)
+        await self._crawler_task(session)
+        await session.close()
+
+    async def _crawler_task(self, session):
         self._stop_event.clear()
-        first_page = await self._fetch(1)
+
+        task = asyncio.ensure_future(self._fetch(1, session), loop=self._loop)
+        async with CancelOnEvent(self._stop_event, task, self._loop):
+            try:
+                first_page = await task
+            except asyncio.CancelledError:
+                print('first page downloading stopped')
+                return
+
         self._write_tnt_entries(first_page)
         num_pages = self.get_num_pages(first_page)
-
         print(f'page 1 processed, ', end='')
 
         if num_pages > 1:
             print(f'other {num_pages-1} pages to download')
         else:
             print('no other pages to download')
+            return
 
-        self._workers.clear()
-        for page in range(2, num_pages + 1):
-            await self._semaphore.acquire()
-            if self._stop_event.is_set():
-                break
-            self._workers.append(asyncio.ensure_future(self.work(page), loop=self._loop))
-        await asyncio.gather(*self._workers, loop=self._loop)
+        workers = []
+        for page in range(2, num_pages+1):
 
-    async def work(self, page):
+            acquire_semaphore = asyncio.ensure_future(self._semaphore.acquire(), loop=self._loop)
+            async with CancelOnEvent(self._stop_event, acquire_semaphore, self._loop):
+                try:
+                    await acquire_semaphore
+                except asyncio.CancelledError:
+                    print('spawning loop stopped')
+                    break
+
+            workers.append(asyncio.ensure_future(self._work(page, session), loop=self._loop))
+
+        group = asyncio.gather(*workers, loop=self._loop)
+        async with CancelOnEvent(self._stop_event, group, self._loop):
+            try:
+                await group
+            except asyncio.CancelledError:
+                print('running workers stopped')
+
+    def stop(self):
+        self._stop_event.set()
+
+    async def _work(self, page, session):
         try:
-            html = await self._fetch(page)
+            html = await self._fetch(page, session)
             self._write_tnt_entries(html)
             print(f'page {page} processed')
         finally:
             self._semaphore.release()
 
-    def stop(self):
-        self._stop_event.set()
-        for task in self._workers:
-            task.cancel()
-
-    def shutdown(self):
-        self._loop.run_until_complete(self._session.close())
-
-    async def _fetch(self, page):
+    async def _fetch(self, page, session):
         data = {'srcrel': self._keyword, 'cat': self._category, 'page': page}
         print(f'downloading page {page}...')
-        async with self._session.post(self.release_list, data=data) as response:
+        async with session.post(self.release_list, data=data) as response:
             return await response.text()
 
     @staticmethod
@@ -124,9 +161,5 @@ if __name__ == '__main__':
     event_loop = asyncio.get_event_loop()
     crawler = TntCrawler(event_loop, TntStdoutWriter())
     crawler.setup('ciao', 0)
-    try:
-        event_loop.run_until_complete(crawler.crawl())
-    finally:
-        crawler.stop()
-        crawler.shutdown()
+    event_loop.run_until_complete(crawler.crawl())
     event_loop.close()
