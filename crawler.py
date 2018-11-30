@@ -137,9 +137,12 @@ class TntCrawler:
         soup = BeautifulSoup(html, 'html.parser')
         table = soup.select('.showrelease_tb > table:nth-of-type(1)')
         # headers in first row of the table
-        for row in table[0].find_all('tr')[1:]:
-            tnt_entry = self._create_tnt_entry(row)
-            self._writer.add(tnt_entry)
+        try:
+            for row in table[0].find_all('tr')[1:]:
+                tnt_entry = self._create_tnt_entry(row)
+                self._writer.add(tnt_entry)
+        except IndexError:
+            pass
 
     @staticmethod
     def get_num_pages(html_doc):

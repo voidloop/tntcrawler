@@ -1,4 +1,4 @@
-A Tkinter lightweigth graphical interface to download magnet links from the 
+A Tkinter lightweight graphical interface to download magnet links from the
 slow http://tntvillage.scambioetico.org. The interface interacts with the 
 software Transmission (https://transmissionbt.com) via transmission-daemon.
 With this software you are able to search and download magnet links and 

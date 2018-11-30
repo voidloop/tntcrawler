@@ -1,8 +1,11 @@
+import time
+
 from crawler import TntCrawler, TntWriter, TntEntry
 from clutch.core import Client
 from queue import Queue, Empty
 from requests.exceptions import ConnectionError
 from tkinter import ttk
+from PIL import Image, ImageTk
 import asyncio
 import tkinter as tk
 import threading
@@ -54,12 +57,14 @@ class TntTreeview(ttk.Treeview):
     def __init__(self, master):
         super().__init__(master, show='headings', columns=self.columns)
 
-        # self.treeview.bind('<Button-3>', self._popup)
-
         self.heading('title', text='Title', command=lambda: self._sort_column('title'))
         self.heading('seeders', text='Seeders', command=lambda: self._sort_column('seeders', klass=int))
         self.heading('leeches', text='Leeches', command=lambda: self._sort_column('leeches', klass=int))
         self.heading('downloaded', text='Downloaded', command=lambda: self._sort_column('downloaded', klass=int))
+
+        self.column(column='seeders', width=100, stretch=False, minwidth=100)
+        self.column(column='leeches', width=100, stretch=False, minwidth=100)
+        self.column(column='downloaded', width=100, stretch=False, minwidth=100)
 
     def _sort_column(self, column, reverse=False, klass: type = str):
         items = [(self.set(k, column), k) for k in self.get_children('')]
@@ -82,15 +87,46 @@ class TntTreeview(ttk.Treeview):
 class ConnectionLabel(tk.Label):
     def __init__(self, master, **option):
         super().__init__(master, **option)
-        self._disconnected_image = tk.BitmapImage(file='images/disconnected.xbm')
-        self._connected_image = tk.BitmapImage(file='images/connected.xbm')
-        self.config(image=self._disconnected_image)
+        disconnected = Image.open('images/disconnected.png').resize((20, 20), Image.ANTIALIAS)
+        connected = Image.open('images/connected.png').resize((20, 20), Image.ANTIALIAS)
 
-    def connected(self):
-        self.config(image=self._connected_image)
+        self._images = {
+            'connected': ImageTk.PhotoImage(connected),
+            'disconnected': ImageTk.PhotoImage(disconnected)
+        }
 
-    def disconnected(self):
-        self.config(image=self._connected_image)
+        self.config(image=self._images['disconnected'])
+
+    def status(self, status):
+        self.config(image=self._images[status])
+
+
+class ConnectionStatusThread(threading.Thread):
+
+    DELAY_MS = 500
+
+    def __init__(self, client: Client):
+        super().__init__()
+        self.queue = Queue()
+        self._client = client
+        self._connected = False
+        self.daemon = True
+
+    def _try_connection(self):
+        try:
+            self._client.list()
+            if not self._connected:
+                self.queue.put('connected')
+                self._connected = True
+        except ConnectionError:
+            if self._connected:
+                self.queue.put('disconnected')
+                self._connected = False
+
+    def run(self):
+        while True:
+            self._try_connection()
+            time.sleep(self.DELAY_MS / 1000)
 
 
 class CrawlerFrame(tk.Frame):
@@ -99,6 +135,7 @@ class CrawlerFrame(tk.Frame):
         self._client = Client()
         self._magnets = dict()
         self._crawler_task = CrawlerScheduler()
+        self._connection_monitor_thread = ConnectionStatusThread(self._client)
 
         top_frame = tk.Frame(self)
         top_frame.columnconfigure(1, weight=1)
@@ -138,19 +175,36 @@ class CrawlerFrame(tk.Frame):
 
         self.pack(expand=tk.YES, fill=tk.BOTH)
 
+        self._connection_monitor_thread.start()
+        self._connection_label.after(ConnectionStatusThread.DELAY_MS, self._process_connection_status)
+
+    def _process_connection_status(self):
+        try:
+            status = self._connection_monitor_thread.queue.get_nowait()
+            if status is None:
+                return
+            else:
+                self._connection_label.status(status)
+        except Empty:
+            pass
+        self._connection_label.after(ConnectionStatusThread.DELAY_MS, self._process_connection_status)
+
+    def _process_crawler_entries(self):
+        try:
+            while True:
+                tnt_entry: TntEntry = self._crawler_task.queue.get_nowait()
+                if tnt_entry is None:
+                    self._stop_downloading()
+                    break
+                item = self._treeview.add(tnt_entry)
+                self._magnets[item] = tnt_entry.magnet
+                self._treeview.update_idletasks()
+        except Empty:
+            self._treeview.after(100, self._process_crawler_entries)
+
     def _clear_magnets(self):
         self._treeview.delete(*self._treeview.get_children())
         self._magnets.clear()
-
-    # def _check_transmission_connection(self):
-    #     while not self._stop_event.is_set():
-    #         try:
-    #             self.client.list()
-    #             self.status_bar.connected()
-    #         except requests.exceptions.ConnectionError:
-    #             self.status_bar.disconnected()
-    #         time.sleep(1)
-    #
 
     def _download_selected_items(self):
         items = self._treeview.selection()
@@ -165,21 +219,8 @@ class CrawlerFrame(tk.Frame):
     def _start_crawler(self):
         self._clear_magnets()
         self._crawler_task.start(self._keyword_var.get())
-        self._treeview.after(1000, self._process_queue)
+        self._treeview.after(1000, self._process_crawler_entries)
         self._start_downloading()
-
-    def _process_queue(self):
-        try:
-            while True:
-                tnt_entry: TntEntry = self._crawler_task.queue.get_nowait()
-                if tnt_entry is None:
-                    self._stop_downloading()
-                    break
-                item = self._treeview.add(tnt_entry)
-                self._magnets[item] = tnt_entry.magnet
-                self._treeview.update_idletasks()
-        except Empty:
-            self._treeview.after(100, self._process_queue)
 
     def _start_downloading(self):
         self._status_var.set('Downloading...')
