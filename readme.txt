@@ -1,3 +1,2 @@
-Crawler per scaricare i file torrent da TNT Village.
-In input l'utente inserisce una parola chiave che è usata per ricercare i magnet link da scaricare.
-Il download delle pagine avviene in modo asincrono e anche il download dei magnet link è asincrono.
+A Tkinter lightweigth graphical interface to download magnet links from the slow http://tntvillage.scambioetico.org. The interface interacts with the software Transmission (https://transmissionbt.com) via transmission-daemon.
+With this software you are able to search and download magnet links and directly send these to Transmission client, why? The TNTVillage site is very slow when you access with a browser.
