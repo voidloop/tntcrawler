@@ -179,6 +179,7 @@ class CrawlerFrame(tk.Frame):
         self._treeview_menu = tk.Menu(self._treeview, tearoff=0)
         self._treeview_menu.add_command(label='Download selected', command=self._download_selected_items)
         self._treeview.bind('<Button-3>', lambda e: self._treeview_menu.tk_popup(e.x_root, e.y_root))
+        self._treeview.bind('<Double-1>', lambda e: self._download_selected_items())
 
         self.pack(expand=tk.YES, fill=tk.BOTH)
 
