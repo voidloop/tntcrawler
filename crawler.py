@@ -56,7 +56,7 @@ class TntCrawler:
     release_list = 'http://www.tntvillage.scambioetico.org/src/releaselist.php'
 
     def __init__(self, loop, writer: TntWriter, max_workers=10):
-        self._loop = loop
+        self._loop: asyncio.AbstractEventLoop = loop
         self._semaphore = asyncio.BoundedSemaphore(max_workers, loop=loop)
         self._stop_event = asyncio.Event(loop=loop)
         self._writer = writer
@@ -121,7 +121,8 @@ class TntCrawler:
                 print('running workers stopped')
 
     def stop(self):
-        self._loop.call_soon_threadsafe(self._stop_event.set)
+        if not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._stop_event.set)
 
     async def _work(self, page, session):
         try:
