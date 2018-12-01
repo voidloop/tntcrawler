@@ -1,17 +1,30 @@
-from abc import abstractmethod, ABC
 from bs4 import BeautifulSoup
 from collections import namedtuple
 import aiohttp
 import asyncio
 
 
-class TntWriter(ABC):
-    @abstractmethod
-    def add(self, magnet):
+TntEntry = namedtuple('TntEntry', 'torrent magnet title leeches seeders downloaded')
+
+
+class TntWriter:
+    def entry_parsed(self, tnt_entry: TntEntry):
         pass
 
+    def before_first_page(self):
+        pass
 
-TntEntry = namedtuple('TntEntry', 'torrent magnet title leeches seeders downloaded')
+    def after_first_page(self, num_pages):
+        pass
+
+    def before_page(self, page):
+        pass
+
+    def after_page(self, page):
+        pass
+
+    def page_processed(self, page):
+        pass
 
 
 class TntCrawlerError(Exception):
@@ -42,7 +55,7 @@ class CancelOnEvent:
 class TntCrawler:
     release_list = 'http://www.tntvillage.scambioetico.org/src/releaselist.php'
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, writer, max_workers=10):
+    def __init__(self, loop, writer: TntWriter, max_workers=10):
         self._loop = loop
         self._semaphore = asyncio.BoundedSemaphore(max_workers, loop=loop)
         self._stop_event = asyncio.Event(loop=loop)
@@ -69,14 +82,17 @@ class TntCrawler:
         task = asyncio.ensure_future(self._fetch(1, session), loop=self._loop)
         async with CancelOnEvent(self._stop_event, task, self._loop):
             try:
+                self._writer.before_first_page()
                 first_page = await task
+                num_pages = self.get_num_pages(first_page)
+                self._writer.after_first_page(num_pages)
             except asyncio.CancelledError:
                 print('first page downloading stopped')
                 return
 
         self._write_tnt_entries(first_page)
-        num_pages = self.get_num_pages(first_page)
         print(f'page 1 processed, ', end='')
+        self._writer.page_processed(1)
 
         if num_pages > 1:
             print(f'other {num_pages-1} pages to download')
@@ -105,13 +121,16 @@ class TntCrawler:
                 print('running workers stopped')
 
     def stop(self):
-        self._stop_event.set()
+        self._loop.call_soon_threadsafe(self._stop_event.set)
 
     async def _work(self, page, session):
         try:
+            self._writer.before_page(page)
             html = await self._fetch(page, session)
+            self._writer.after_page(page)
             self._write_tnt_entries(html)
             print(f'page {page} processed')
+            self._writer.page_processed(page)
         finally:
             self._semaphore.release()
 
@@ -140,7 +159,7 @@ class TntCrawler:
         try:
             for row in table[0].find_all('tr')[1:]:
                 tnt_entry = self._create_tnt_entry(row)
-                self._writer.add(tnt_entry)
+                self._writer.entry_parsed(tnt_entry)
         except IndexError:
             pass
 
@@ -158,7 +177,7 @@ class TntCrawler:
 if __name__ == '__main__':
 
     class TntStdoutWriter(TntWriter):
-        def add(self, tnt_entry: TntEntry):
+        def entry_parsed(self, tnt_entry: TntEntry):
             print(tnt_entry.magnet)
 
     event_loop = asyncio.get_event_loop()

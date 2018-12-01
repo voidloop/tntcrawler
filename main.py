@@ -1,7 +1,7 @@
 import time
 
 from crawler import TntCrawler, TntWriter, TntEntry
-from clutch.core import Client
+from clutch.core import Client, TransmissionRPCError
 from queue import Queue, Empty
 from requests.exceptions import ConnectionError
 from tkinter import ttk
@@ -11,43 +11,70 @@ import tkinter as tk
 import threading
 
 
-class CrawlerScheduler:
+class QueuesWriter(TntWriter):
+    def __init__(self, entries: Queue, pages: Queue):
+        super().__init__()
+        self._entries = entries
+        self._pages = pages
 
-    class TntQueueWriter(TntWriter):
-        def __init__(self, queue: Queue):
-            super().__init__()
-            self._queue = queue
+    def entry_parsed(self, tnt_entry: TntEntry):
+        self._entries.put(tnt_entry)
 
-        def add(self, tnt_entry: TntEntry):
-            self._queue.put(tnt_entry)
+    def after_first_page(self, num_pages):
+        self._pages.put(num_pages)
 
-    def __init__(self):
-        self.queue = Queue()
-        self._crawler = None
-        self._lock = threading.Lock()
-        self._loop = None
+    def page_processed(self, page):
+        self._pages.put(page)
 
-    def start(self, keyword):
-        with self._lock:
-            if self._crawler is None:
-                threading.Thread(target=self._task, args=(keyword,), daemon=True).start()
 
-    def _task(self, keyword):
-        with self._lock:
-            self._loop = asyncio.new_event_loop()
-            self._crawler = TntCrawler(self._loop, CrawlerScheduler.TntQueueWriter(self.queue))
-        self._crawler.setup(keyword, 0)
-        self._loop.run_until_complete(self._crawler.crawl())
-        # self._loop.close()
-        self.queue.put(None)
-        with self._lock:
-            self._crawler = None
+class CrawlerThread(threading.Thread):
+    def __init__(self, keyword):
+        super().__init__()
+        self.entries = Queue()
+        self.pages = Queue()
+        self._loop = asyncio.new_event_loop()
+        self._tnt_crawler = TntCrawler(self._loop, QueuesWriter(self.entries, self.pages))
+        self._keyword = keyword
+        self.daemon = True
+
+    def run(self):
+        asyncio.set_event_loop(self._loop)
+        self._tnt_crawler.setup(keyword=self._keyword, category=0)
+        self._loop.run_until_complete(self._tnt_crawler.crawl())
+        self._loop.close()
+        self.entries.put(None)
+        self.pages.put(None)
 
     def stop(self):
-        with self._lock:
-            if self._crawler is None:
-                return
-        self._loop.call_soon_threadsafe(self._crawler.stop)
+        self._tnt_crawler.stop()
+
+
+class ClientThread(threading.Thread):
+
+    delay_ms = 500
+
+    def __init__(self, client: Client):
+        super().__init__()
+        self.queue = Queue()
+        self._client = client
+        self._connected = False
+        self.daemon = True
+
+    def _try_connection(self):
+        try:
+            self._client.list()
+            if not self._connected:
+                self.queue.put('connected')
+                self._connected = True
+        except ConnectionError:
+            if self._connected:
+                self.queue.put('disconnected')
+                self._connected = False
+
+    def run(self):
+        while True:
+            self._try_connection()
+            time.sleep(self.delay_ms / 1000)
 
 
 class TntTreeview(ttk.Treeview):
@@ -65,6 +92,8 @@ class TntTreeview(ttk.Treeview):
         self.column(column='seeders', width=100, stretch=False, minwidth=100)
         self.column(column='leeches', width=100, stretch=False, minwidth=100)
         self.column(column='downloaded', width=100, stretch=False, minwidth=100)
+
+        self.tag_configure('transmission', foreground='green')
 
     def _sort_column(self, column, reverse=False, klass: type = str):
         items = [(self.set(k, column), k) for k in self.get_children('')]
@@ -101,41 +130,12 @@ class ConnectionLabel(tk.Label):
         self.config(image=self._images[status])
 
 
-class ConnectionStatusThread(threading.Thread):
-
-    DELAY_MS = 500
-
-    def __init__(self, client: Client):
-        super().__init__()
-        self.queue = Queue()
-        self._client = client
-        self._connected = False
-        self.daemon = True
-
-    def _try_connection(self):
-        try:
-            self._client.list()
-            if not self._connected:
-                self.queue.put('connected')
-                self._connected = True
-        except ConnectionError:
-            if self._connected:
-                self.queue.put('disconnected')
-                self._connected = False
-
-    def run(self):
-        while True:
-            self._try_connection()
-            time.sleep(self.DELAY_MS / 1000)
-
-
 class CrawlerFrame(tk.Frame):
     def __init__(self, master=None):
         super().__init__(master)
         self._client = Client()
         self._magnets = dict()
-        self._crawler_task = CrawlerScheduler()
-        self._connection_monitor_thread = ConnectionStatusThread(self._client)
+        self._client_thread = ClientThread(self._client)
 
         top_frame = tk.Frame(self)
         top_frame.columnconfigure(1, weight=1)
@@ -151,13 +151,20 @@ class CrawlerFrame(tk.Frame):
         self._keyword_entry.bind('<Return>', lambda e: self._start_crawler())
 
         bottom_frame = tk.Frame(self)
-        bottom_frame.columnconfigure(0, weight=1)
+        bottom_frame.columnconfigure(1, weight=1)
         bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
         self._status_var = tk.Variable()
         tk.Label(bottom_frame, bd=1, anchor=tk.W, textvariable=self._status_var).grid(row=0, column=0, sticky='WE')
+
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("TProgressbar", thickness=5)
+        self._progress_bar = ttk.Progressbar(bottom_frame, orient=tk.HORIZONTAL, style="TProgressbar",
+                                             length=100, mode="determinate")
+
         self._connection_label = ConnectionLabel(bottom_frame)
-        self._connection_label.grid(row=0, column=1)
+        self._connection_label.grid(row=0, column=2)
 
         middle_frame = tk.Frame(self)
         middle_frame.pack(expand=tk.YES, fill=tk.BOTH)
@@ -175,32 +182,61 @@ class CrawlerFrame(tk.Frame):
 
         self.pack(expand=tk.YES, fill=tk.BOTH)
 
-        self._connection_monitor_thread.start()
-        self._connection_label.after(ConnectionStatusThread.DELAY_MS, self._process_connection_status)
+        self._client_thread.start()
+        self._connection_label.after(self._client_thread.delay_ms, self._process_connection)
 
-    def _process_connection_status(self):
+    def _process_connection(self):
         try:
-            status = self._connection_monitor_thread.queue.get_nowait()
+            status = self._client_thread.queue.get_nowait()
             if status is None:
                 return
             else:
                 self._connection_label.status(status)
         except Empty:
             pass
-        self._connection_label.after(ConnectionStatusThread.DELAY_MS, self._process_connection_status)
+        self._connection_label.after(self._client_thread.delay_ms, self._process_connection)
 
-    def _process_crawler_entries(self):
+    def _process_first_page(self, crawler_thread: CrawlerThread):
+        try:
+            num_pages = crawler_thread.pages.get_nowait()
+            if num_pages is None:
+                self._crawler_stopped()
+            else:
+                if num_pages > 1:
+                    self._status_var.set('Found {} pages: downloading...'.format(num_pages))
+                    self._display_progress_bar(num_pages)
+                    self._progress_bar.after(100, self._process_pages, crawler_thread)
+                    self._treeview.after(100, self._process_entries, crawler_thread)
+        except Empty:
+            self._treeview.after(100, self._process_first_page, crawler_thread)
+
+    def _display_progress_bar(self, num_pages):
+        self._progress_bar.config(maximum=num_pages, value=0)
+        self._progress_bar.grid(row=0, column=1, sticky='E', padx=10)
+
+    def _process_pages(self, crawler_thread: CrawlerThread):
+        try:
+            page = crawler_thread.pages.get_nowait()
+            if page is None:
+                self._progress_bar.grid_forget()
+                return
+            self._progress_bar['value'] += 1
+        except Empty:
+            pass
+        self._progress_bar.after(100, self._process_pages, crawler_thread)
+
+    def _process_entries(self, crawler_thread: CrawlerThread):
         try:
             while True:
-                tnt_entry: TntEntry = self._crawler_task.queue.get_nowait()
+                tnt_entry: TntEntry = crawler_thread.entries.get_nowait()
                 if tnt_entry is None:
-                    self._stop_downloading()
+                    self._crawler_stopped()
                     break
                 item = self._treeview.add(tnt_entry)
                 self._magnets[item] = tnt_entry.magnet
                 self._treeview.update_idletasks()
         except Empty:
-            self._treeview.after(100, self._process_crawler_entries)
+            self._treeview.after(100, self._process_entries, crawler_thread)
 
     def _clear_magnets(self):
         self._treeview.delete(*self._treeview.get_children())
@@ -212,23 +248,24 @@ class CrawlerFrame(tk.Frame):
             try:
                 magnet = self._magnets[item]
                 self._client.torrent.add(filename=magnet)
+                self._treeview.item(item, tags='transmission')
                 print(magnet)
             except ConnectionError:
                 print('Transmission is not running')
+            except TransmissionRPCError as e:
+                print(e)
 
     def _start_crawler(self):
         self._clear_magnets()
-        self._crawler_task.start(self._keyword_var.get())
-        self._treeview.after(1000, self._process_crawler_entries)
-        self._start_downloading()
-
-    def _start_downloading(self):
         self._status_var.set('Downloading...')
         self._keyword_entry.config(state=tk.DISABLED)
-        self._search_button.config(command=self._crawler_task.stop, text='Stop')
+        crawler_thread = CrawlerThread(self._keyword_var.get())
+        crawler_thread.start()
+        self._search_button.config(command=crawler_thread.stop, text='Stop')
+        self._treeview.after(1000, self._process_first_page, crawler_thread)
 
-    def _stop_downloading(self):
-        self._status_var.set('Done: {} magnets downloaded'.format(len(self._magnets)))
+    def _crawler_stopped(self):
+        self._status_var.set('Done: downloaded {} magnets'.format(len(self._magnets)))
         self._keyword_entry.config(state=tk.NORMAL)
         self._search_button.config(command=self._start_crawler, text='Search')
 
