@@ -186,6 +186,15 @@ class CrawlerFrame(tk.Frame):
         self._client_thread.start()
         self._connection_label.after(self._client_thread.delay_ms, self._process_connection)
 
+    def _start_crawler(self):
+        self._clear_magnets()
+        self._status_var.set('Downloading...')
+        self._keyword_entry.config(state=tk.DISABLED)
+        crawler_thread = CrawlerThread(self._keyword_var.get())
+        crawler_thread.start()
+        self._search_button.config(command=crawler_thread.stop, text='Stop')
+        self._treeview.after(1000, self._process_first_page, crawler_thread)
+
     def _process_connection(self):
         try:
             status = self._client_thread.queue.get_nowait()
@@ -203,11 +212,11 @@ class CrawlerFrame(tk.Frame):
             if num_pages is None:
                 self._crawler_stopped()
             else:
+                self._process_entries(crawler_thread)
                 if num_pages > 1:
                     self._status_var.set('Found {} pages: downloading...'.format(num_pages))
                     self._display_progress_bar(num_pages)
                     self._progress_bar.after(100, self._process_pages, crawler_thread)
-                    self._treeview.after(100, self._process_entries, crawler_thread)
         except Empty:
             self._treeview.after(100, self._process_first_page, crawler_thread)
 
@@ -224,7 +233,7 @@ class CrawlerFrame(tk.Frame):
             self._progress_bar['value'] += 1
         except Empty:
             pass
-        self._progress_bar.after(100, self._process_pages, crawler_thread)
+        self._progress_bar.after(200, self._process_pages, crawler_thread)
 
     def _process_entries(self, crawler_thread: CrawlerThread):
         try:
@@ -255,15 +264,6 @@ class CrawlerFrame(tk.Frame):
                 print('Transmission is not running')
             except TransmissionRPCError as e:
                 print(e)
-
-    def _start_crawler(self):
-        self._clear_magnets()
-        self._status_var.set('Downloading...')
-        self._keyword_entry.config(state=tk.DISABLED)
-        crawler_thread = CrawlerThread(self._keyword_var.get())
-        crawler_thread.start()
-        self._search_button.config(command=crawler_thread.stop, text='Stop')
-        self._treeview.after(1000, self._process_first_page, crawler_thread)
 
     def _crawler_stopped(self):
         self._status_var.set('Done: downloaded {} magnets'.format(len(self._magnets)))
