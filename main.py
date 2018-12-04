@@ -1,5 +1,3 @@
-import time
-
 from crawler import TntCrawler, TntWriter, TntEntry
 from clutch.core import Client, TransmissionRPCError
 from queue import Queue, Empty
@@ -7,6 +5,7 @@ from requests.exceptions import ConnectionError
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 import asyncio
+import time
 import tkinter as tk
 import threading
 
