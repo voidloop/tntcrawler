@@ -118,10 +118,8 @@ class ConnectionLabel(tk.Label):
         disconnected = Image.open('images/disconnected.png').resize((20, 20), Image.ANTIALIAS)
         connected = Image.open('images/connected.png').resize((20, 20), Image.ANTIALIAS)
 
-        self._images = {
-            'connected': ImageTk.PhotoImage(connected),
-            'disconnected': ImageTk.PhotoImage(disconnected)
-        }
+        self._images = {'connected': ImageTk.PhotoImage(connected),
+                        'disconnected': ImageTk.PhotoImage(disconnected),}
 
         self.config(image=self._images['disconnected'])
 
@@ -178,7 +176,8 @@ class CrawlerFrame(tk.Frame):
         self._treeview_menu = tk.Menu(self._treeview, tearoff=0)
         self._treeview_menu.add_command(label='Download selected', command=self._download_selected_items)
         self._treeview.bind('<Button-3>', lambda e: self._treeview_menu.tk_popup(e.x_root, e.y_root))
-        self._treeview.bind('<Double-1>', lambda e: self._download_selected_items())
+        # TODO: no double click to whole treeview, it's allowed only on treeview's entries
+        # self._treeview.bind('<Double-1>', lambda e: self._download_selected_items())
 
         self.pack(expand=tk.YES, fill=tk.BOTH)
 
@@ -260,7 +259,8 @@ class CrawlerFrame(tk.Frame):
                 self._treeview.item(item, tags='transmission')
                 print(magnet)
             except ConnectionError:
-                messagebox.showwarning('TNT Crawler Error', 'transmission-daemon connection failed')
+                messagebox.showwarning('Connection failed', 'transmission-daemon is unreachable')
+                break
             except TransmissionRPCError as e:
                 print(e)
 

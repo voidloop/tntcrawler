@@ -162,7 +162,7 @@ class TntCrawler:
                 tnt_entry = self._create_tnt_entry(row)
                 self._writer.entry_parsed(tnt_entry)
         except IndexError:
-            pass
+            print('failed a row parsing')
 
     @staticmethod
     def get_num_pages(html_doc):
