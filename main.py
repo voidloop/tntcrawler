@@ -4,7 +4,7 @@ from crawler import TntCrawler, TntWriter, TntEntry
 from clutch.core import Client, TransmissionRPCError
 from queue import Queue, Empty
 from requests.exceptions import ConnectionError
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 import asyncio
 import tkinter as tk
@@ -261,7 +261,7 @@ class CrawlerFrame(tk.Frame):
                 self._treeview.item(item, tags='transmission')
                 print(magnet)
             except ConnectionError:
-                print('Transmission is not running')
+                messagebox.showwarning('TNT Crawler Error', 'transmission-daemon connection failed')
             except TransmissionRPCError as e:
                 print(e)
 
