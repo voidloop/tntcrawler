@@ -1,5 +1,6 @@
-from crawler import TntCrawler, TntWriter, TntEntry
 from clutch.core import Client, TransmissionRPCError
+from crawler import TntCrawler, TntWriter, TntEntry
+from pkg_resources import resource_stream
 from queue import Queue, Empty
 from requests.exceptions import ConnectionError
 from tkinter import ttk, messagebox
@@ -115,11 +116,13 @@ class TntTreeview(ttk.Treeview):
 class ConnectionLabel(tk.Label):
     def __init__(self, master, **option):
         super().__init__(master, **option)
-        disconnected = Image.open('images/disconnected.png').resize((20, 20), Image.ANTIALIAS)
-        connected = Image.open('images/connected.png').resize((20, 20), Image.ANTIALIAS)
+        disconnected = Image.open(
+            'images/disconnected.png').resize((20, 20), Image.ANTIALIAS)
+        connected = Image.open(
+            'images/connected.png').resize((20, 20), Image.ANTIALIAS)
 
         self._images = {'connected': ImageTk.PhotoImage(connected),
-                        'disconnected': ImageTk.PhotoImage(disconnected),}
+                        'disconnected': ImageTk.PhotoImage(disconnected)}
 
         self.config(image=self._images['disconnected'])
 
